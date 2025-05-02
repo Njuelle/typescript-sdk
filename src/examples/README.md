@@ -82,6 +82,19 @@ A server that uses Streamable HTTP transport with JSON response mode enabled (no
 npx tsx src/examples/server/jsonResponseStreamableHttp.ts
 ```
 
+##### Fastify Server Integration
+
+A server implementation that demonstrates how to integrate MCP with the Fastify web framework.
+
+- Using the Fastify adapter to expose MCP functionality
+- Setting up routes with proper session management
+- Implementing custom tools with notification support
+- Example of structuring an MCP server as part of a larger web application
+
+```bash
+npx tsx src/examples/server/fastifyServer.ts
+```
+
 ##### Streamable HTTP with server notifications
 
 A server that demonstrates server notifications using Streamable HTTP. 

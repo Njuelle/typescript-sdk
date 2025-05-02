@@ -381,6 +381,188 @@ This stateless approach is useful for:
 - RESTful scenarios where each request is independent
 - Horizontally scaled deployments without shared session state
 
+#### With Fastify
+
+If you prefer using Fastify instead of Express, you can implement the Streamable HTTP transport as follows:
+
+```typescript
+import Fastify from 'fastify';
+import { randomUUID } from 'node:crypto';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+
+const fastify = Fastify();
+
+// Map to store transports by session ID
+const transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
+
+// Handle POST requests for client-to-server communication
+fastify.post('/mcp', async (request, reply) => {
+  // Check for existing session ID
+  const sessionId = request.headers['mcp-session-id'] as string | undefined;
+  let transport: StreamableHTTPServerTransport;
+
+  if (sessionId && transports[sessionId]) {
+    // Reuse existing transport
+    transport = transports[sessionId];
+  } else if (!sessionId && isInitializeRequest(request.body)) {
+    // New initialization request
+    transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      onsessioninitialized: (sessionId) => {
+        // Store the transport by session ID
+        transports[sessionId] = transport;
+      }
+    });
+
+    // Clean up transport when closed
+    transport.onclose = () => {
+      if (transport.sessionId) {
+        delete transports[transport.sessionId];
+      }
+    };
+    const server = new McpServer({
+      name: "example-server",
+      version: "1.0.0"
+    });
+
+    // ... set up server resources, tools, and prompts ...
+
+    // Connect to the MCP server
+    await server.connect(transport);
+  } else {
+    // Invalid request
+    return reply.status(400).send({
+      jsonrpc: '2.0',
+      error: {
+        code: -32000,
+        message: 'Bad Request: No valid session ID provided',
+      },
+      id: null,
+    });
+  }
+
+  // Handle the request
+  await transport.handleRequest(request.raw, reply.raw, request.body);
+  return reply; // Fastify requires returning the reply
+});
+
+// Handle GET requests for server-to-client notifications via SSE
+fastify.get('/mcp', async (request, reply) => {
+  const sessionId = request.headers['mcp-session-id'] as string | undefined;
+  if (!sessionId || !transports[sessionId]) {
+    return reply.status(400).send('Invalid or missing session ID');
+  }
+  
+  const transport = transports[sessionId];
+  await transport.handleRequest(request.raw, reply.raw);
+  return reply;
+});
+
+// Handle DELETE requests for session termination
+fastify.delete('/mcp', async (request, reply) => {
+  const sessionId = request.headers['mcp-session-id'] as string | undefined;
+  if (!sessionId || !transports[sessionId]) {
+    return reply.status(400).send('Invalid or missing session ID');
+  }
+  
+  const transport = transports[sessionId];
+  await transport.handleRequest(request.raw, reply.raw);
+  return reply;
+});
+
+// Start the server
+const start = async () => {
+  try {
+    await fastify.listen({ port: 3000 });
+    console.log('MCP Streamable HTTP Server with Fastify listening on port 3000');
+  } catch (err) {
+    fastify.log.error(err);
+    process.exit(1);
+  }
+};
+
+start();
+```
+
+For stateless operation with Fastify:
+
+```typescript
+import Fastify from 'fastify';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+
+const fastify = Fastify();
+
+fastify.post('/mcp', async (request, reply) => {
+  try {
+    const server = getServer(); 
+    const transport: StreamableHTTPServerTransport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    });
+    
+    request.raw.on('close', () => {
+      console.log('Request closed');
+      transport.close();
+      server.close();
+    });
+    
+    await server.connect(transport);
+    await transport.handleRequest(request.raw, reply.raw, request.body);
+    return reply;
+  } catch (error) {
+    console.error('Error handling MCP request:', error);
+    if (!reply.sent) {
+      return reply.status(500).send({
+        jsonrpc: '2.0',
+        error: {
+          code: -32603,
+          message: 'Internal server error',
+        },
+        id: null,
+      });
+    }
+    return reply;
+  }
+});
+
+// Handle GET and DELETE methods with 405 Method Not Allowed
+fastify.get('/mcp', async (request, reply) => {
+  return reply.status(405).send({
+    jsonrpc: "2.0",
+    error: {
+      code: -32000,
+      message: "Method not allowed."
+    },
+    id: null
+  });
+});
+
+fastify.delete('/mcp', async (request, reply) => {
+  return reply.status(405).send({
+    jsonrpc: "2.0",
+    error: {
+      code: -32000,
+      message: "Method not allowed."
+    },
+    id: null
+  });
+});
+
+const start = async () => {
+  try {
+    await fastify.listen({ port: 3000 });
+    console.log('MCP Stateless Streamable HTTP Server with Fastify listening on port 3000');
+  } catch (err) {
+    fastify.log.error(err);
+    process.exit(1);
+  }
+};
+
+start();
+```
+
 ### Testing and Debugging
 
 To test your server, you can use the [MCP Inspector](https://github.com/modelcontextprotocol/inspector). See its README for more information.
